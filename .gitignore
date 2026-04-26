@@ -1,0 +1,22 @@
+# Rust build output
+target/
+**/target/
+
+# Rust compiler backup files
+**/*.rs.bk
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
