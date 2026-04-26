@@ -1,3 +1,4 @@
+use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 
@@ -15,7 +16,11 @@ fn main() -> io::Result<()> {
 
     for stream in listener.incoming() {
         match stream {
-            Ok(stream) => handle_connection(stream)?,
+            Ok(stream) => {
+                if let Err(error) = handle_connection(stream) {
+                    eprintln!("Request failed: {error}");
+                }
+            }
             Err(error) => eprintln!("Connection failed: {error}"),
         }
     }
@@ -33,18 +38,28 @@ fn handle_connection(mut stream: TcpStream) -> io::Result<()> {
             method: "GET",
             path: "/",
             ..
-        }) => send_response(&mut stream, "200 OK", "text/html", "<h1>Home</h1>"),
+        }) => serve_file(&mut stream, "public/index.html"),
+        Some(RequestLine {
+            method: "GET",
+            path: "/about",
+            ..
+        }) => serve_file(&mut stream, "public/about.html"),
         Some(RequestLine {
             method: "GET",
             path: "/health",
             ..
-        }) => send_response(&mut stream, "200 OK", "text/plain", "ok\n"),
+        }) => send_response(&mut stream, "200 OK", "text/plain", b"ok\n"),
         Some(RequestLine {
             method: "GET",
             ..
-        }) => send_response(&mut stream, "404 Not Found", "text/plain", "Not Found\n"),
-        Some(_) => send_response(&mut stream, "405 Method Not Allowed", "text/plain", "Method not allowed\n"),
-        None => send_response(&mut stream, "400 Bad Request", "text/plain", "Bad Request\n"),
+        }) => send_response(&mut stream, "404 Not Found", "text/plain", b"Not Found\n"),
+        Some(_) => send_response(
+            &mut stream,
+            "405 Method Not Allowed",
+            "text/plain",
+            b"Method not allowed\n",
+        ),
+        None => send_response(&mut stream, "400 Bad Request", "text/plain", b"Bad Request\n"),
     }
 }
 
@@ -59,17 +74,30 @@ fn parse_request_line(request: &str) -> Option<RequestLine<'_>> {
     })
 }
 
+fn serve_file(stream: &mut TcpStream, path: &str) -> io::Result<()> {
+    match fs::read(path) {
+        Ok(contents) => send_response(stream, "200 OK", "text/html", &contents),
+        Err(_) => send_response(
+            stream,
+            "500 Internal Server Error",
+            "text/plain",
+            b"Could not read file\n",
+        ),
+    }
+}
+
 fn send_response(
     stream: &mut TcpStream,
     status: &str,
     content_type: &str,
-    body: &str,
+    body: &[u8],
 ) -> io::Result<()> {
-    let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\n\r\n{body}",
+    let headers = format!(
+        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n",
         body.len()
     );
 
-    stream.write_all(response.as_bytes())?;
+    stream.write_all(headers.as_bytes())?;
+    stream.write_all(body)?;
     stream.flush()
 }
