@@ -36,23 +36,15 @@ fn handle_connection(mut stream: TcpStream) -> io::Result<()> {
     match parse_request_line(&request) {
         Some(RequestLine {
             method: "GET",
-            path: "/",
+            path,
             ..
-        }) => serve_file(&mut stream, "public/index.html"),
-        Some(RequestLine {
-            method: "GET",
-            path: "/about",
-            ..
-        }) => serve_file(&mut stream, "public/about.html"),
-        Some(RequestLine {
-            method: "GET",
-            path: "/health",
-            ..
-        }) => send_response(&mut stream, "200 OK", "text/plain", b"ok\n"),
-        Some(RequestLine {
-            method: "GET",
-            ..
-        }) => send_response(&mut stream, "404 Not Found", "text/plain", b"Not Found\n"),
+        }) => match file_for_route(path) {
+            Some(file_path) => serve_file(&mut stream, file_path),
+            None if path == "/health" => {
+                send_response(&mut stream, "200 OK", "text/plain", b"ok\n")
+            }
+            None => send_response(&mut stream, "404 Not Found", "text/plain", b"Not Found\n"),
+        },
         Some(_) => send_response(
             &mut stream,
             "405 Method Not Allowed",
@@ -118,5 +110,13 @@ fn content_type_for_path(path: &str) -> &'static str {
         "image/jpeg"
     } else {
         "application/octet-stream"
+    }
+}
+
+fn file_for_route(path: &str) -> Option<&'static str> {
+    match path {
+        "/" => Some("public/index.html"),
+        "/about" => Some("public/about.html"),
+        _ => None,
     }
 }
