@@ -76,7 +76,10 @@ fn parse_request_line(request: &str) -> Option<RequestLine<'_>> {
 
 fn serve_file(stream: &mut TcpStream, path: &str) -> io::Result<()> {
     match fs::read(path) {
-        Ok(contents) => send_response(stream, "200 OK", "text/html", &contents),
+        Ok(contents) => {
+            let content_type = content_type_for_path(path);
+            send_response(stream, "200 OK", "text/html", &contents)
+        }
         Err(_) => send_response(
             stream,
             "500 Internal Server Error",
@@ -100,4 +103,20 @@ fn send_response(
     stream.write_all(headers.as_bytes())?;
     stream.write_all(body)?;
     stream.flush()
+}
+
+fn content_type_for_path(path: &str) -> &'static str {
+    if path.ends_with(".html") {
+        "text/html"
+    } else if path.ends_with(".css") {
+        "text/css"
+    } else if path.ends_with(".js") {
+        "application/javascript"
+    } else if path.ends_with(".png") {
+        "image/png"
+    } else if path.ends_with(".jpg") || path.ends_with(".jpeg") {
+        "image/jpeg"
+    } else {
+        "application/octet-stream"
+    }
 }
