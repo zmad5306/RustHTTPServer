@@ -3,6 +3,7 @@
 .gdb_history
 Cargo.lock
 target/
+pico-blink.uf2
 
 # editor files
 .vscode/*
