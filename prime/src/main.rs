@@ -2,59 +2,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-// Each worker sieves at most this many numbers at a time. Since the sieve uses
-// one bit per number, this is about 8 MiB per worker.
+// Each worker sieves at most this many numbers at a time. Vec<bool> is packed,
+// so this is about 8 MiB per worker.
 const SEGMENT_NUMBER_COUNT: usize = 64_000_000;
 
-// Convert a logical bit index into the byte that owns it and a mask for that
-// specific bit. The same helper works for both the global base-prime sieve and
-// each worker's local segment sieve.
-fn bit_mask(i: usize) -> (usize, u8) {
-    // Each u8 stores 8 prime/not-prime flags, so number i lives in byte i / 8.
-    let byte_index = i / 8;
-
-    // This creates a byte with only i's bit turned on.
-    // Example: if i % 8 == 3, the mask is 0000_1000.
-    let mask = 1u8 << (i % 8);
-
-    (byte_index, mask)
-}
-
-// Read one packed boolean from the bitset.
-fn get_bit(bits: &[u8], i: usize) -> bool {
-    let (byte_index, mask) = bit_mask(i);
-
-    // If this bit is set, i is still marked as prime.
-    bits[byte_index] & mask != 0
-}
-
-// Mark one packed boolean as false.
-fn clear_bit(bits: &mut [u8], i: usize) {
-    let (byte_index, mask) = bit_mask(i);
-
-    // !mask has every bit set except i's bit, so &= turns only that bit off.
-    bits[byte_index] &= !mask;
-}
-
-// Count how many prime flags are still set. bit_count is the number of real
-// flags; the backing Vec may have extra padding bits in its final byte.
-fn count_set_bits(bits: &[u8], bit_count: usize) -> usize {
-    let full_bytes = bit_count / 8;
-    let remaining_bits = bit_count % 8;
-
-    let mut count: usize = bits[..full_bytes]
-        .iter()
-        .map(|byte| byte.count_ones() as usize)
-        .sum();
-
-    if remaining_bits > 0 {
-        // The final byte may include extra padding bits past n, so only count
-        // the bits that represent actual numbers.
-        let mask = (1u8 << remaining_bits) - 1;
-        count += (bits[full_bytes] & mask).count_ones() as usize;
-    }
-
-    count
+fn count_prime_flags(is_prime: &[bool]) -> usize {
+    is_prime.iter().filter(|&&is_prime| is_prime).count()
 }
 
 // Integer square root rounded down. This avoids relying on floating point for
@@ -85,51 +38,45 @@ fn small_primes_up_to(n: usize) -> Vec<usize> {
         return Vec::new();
     }
 
-    let bit_count = n + 1;
+    // Start with every number marked prime until it is crossed off.
+    let mut is_prime = vec![true; n + 1];
 
-    // Round up to enough bytes to hold n + 1 bits.
-    let byte_count = (bit_count + 7) / 8;
-
-    // Start with every bit set to 1, meaning "assume prime until crossed off."
-    let mut is_prime = vec![0xFFu8; byte_count];
-
-    clear_bit(&mut is_prime, 0);
-    clear_bit(&mut is_prime, 1);
+    is_prime[0] = false;
+    is_prime[1] = false;
 
     let mut p: usize = 2;
 
     // p <= n / p is the overflow-safe version of p * p <= n.
     while p <= n / p {
-        if get_bit(&is_prime, p) {
+        if is_prime[p] {
             let mut i = p * p;
             while i <= n {
-                clear_bit(&mut is_prime, i);
+                is_prime[i] = false;
                 i += p;
             }
         }
         p += 1;
     }
 
-    (2..=n).filter(|&i| get_bit(&is_prime, i)).collect()
+    (2..=n).filter(|&i| is_prime[i]).collect()
 }
 
 // Count primes in one inclusive range. This function is designed to be run by
 // one thread, so each worker owns its own bitset and never writes shared memory.
 fn count_primes_in_segment(low: usize, high: usize, base_primes: &[usize]) -> usize {
     let bit_count = high - low + 1;
-    let byte_count = (bit_count + 7) / 8;
-    let mut is_prime = vec![0xFFu8; byte_count];
+    let mut is_prime = vec![true; bit_count];
 
-    // In a segment, bit 0 represents `low`, not the number 0. Only segments
+    // In a segment, index 0 represents `low`, not the number 0. Only segments
     // that actually contain 0 or 1 need those non-primes cleared by hand.
     if low == 0 {
-        clear_bit(&mut is_prime, 0);
+        is_prime[0] = false;
 
         if bit_count > 1 {
-            clear_bit(&mut is_prime, 1);
+            is_prime[1] = false;
         }
     } else if low == 1 {
-        clear_bit(&mut is_prime, 0);
+        is_prime[0] = false;
     }
 
     for &p in base_primes {
@@ -148,13 +95,13 @@ fn count_primes_in_segment(low: usize, high: usize, base_primes: &[usize]) -> us
         let mut i = p_squared.max(first_multiple);
 
         while i <= high {
-            // Convert the global number i into this segment's local bit index.
-            clear_bit(&mut is_prime, i - low);
+            // Convert the global number i into this segment's local index.
+            is_prime[i - low] = false;
             i += p;
         }
     }
 
-    count_set_bits(&is_prime, bit_count)
+    count_prime_flags(&is_prime)
 }
 
 // Parallel segmented sieve of Eratosthenes.
